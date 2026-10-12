@@ -6,12 +6,15 @@ Created on Thu Oct  1 15:13:08 2026
 """
 
 import json
+from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 
 # --- Configuration ---
-file_path = 'air(dry)_nXsection_data.json'
+project_dir = Path(__file__).resolve().parent
+file_path = project_dir / 'air(dry)_nXsection_data.json'
+output_dir = project_dir / 'outputs'
 # Add the energies (in eV) where you want vertical lines and data labels
 highlight_energies_ev = [0.0253, 2.45e6, 1.4e7]
 minE = 1e5
@@ -130,7 +133,8 @@ def plot_all_cross_sections(filepath, target_energies=None, min_e=1, max_e=1e9, 
     ax.set_ylim(bottom=1e-6)
     
     plt.tight_layout()
-    plt.savefig('all_cross_sections_plot.png', bbox_inches='tight')
+    output_dir.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_dir / 'all_cross_sections_plot.png', bbox_inches='tight')
     plt.show()
 
 if __name__ == "__main__":

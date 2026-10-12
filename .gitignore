@@ -13,4 +13,4 @@ __pycache__/
 *.png
 
 # MCNP input, tally, and simulation output files.
-mcnp_neutron_results/
+outputs/

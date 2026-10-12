@@ -16,6 +16,7 @@ plt.rcParams.update({
 
 jeff_directory = Path(__file__).resolve().parent / "JEFF40"
 file_path = jeff_directory / "n_82-Pb-206g.jeff"
+output_dir = Path(__file__).resolve().parent / "outputs"
 
 pb_data = openmc_data.IncidentNeutron.from_endf(file_path)
 
@@ -76,7 +77,8 @@ if outgoing_energies:
     ax2.fill_between(outgoing_energies, outgoing_weights, alpha=0.3, color='#d62728')
 
 plt.tight_layout()
-plt.savefig('neutron_energy_profile.png')
+output_dir.mkdir(parents=True, exist_ok=True)
+plt.savefig(output_dir / 'neutron_energy_profile.png')
 plt.show()
 
 print(f"Total Macroscopic Attenuation Factor (Microscopic Total XS): {total_xs:.3f} barns")

@@ -1,10 +1,13 @@
 import json
+from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 
 # --- Configuration ---
-file_path = 'H20(liq)_nXsection_data.json'
+project_dir = Path(__file__).resolve().parent
+file_path = project_dir / 'H20(liq)_nXsection_data.json'
+output_dir = project_dir / 'outputs'
 incident_energies_mev = [1.0, 2.45, 10.0, 13.8, 14.1, 14.5, 17.0]
 max_thickness_mm = 20
 energy_cutoff_mev = 1.0e-9  
@@ -167,7 +170,8 @@ def run_neutron_analysis():
     ax2.grid(which='minor', linestyle=':', linewidth=0.5, color='gray', alpha=0.4)
 
     plt.tight_layout()
-    plt.savefig('neutron_analysis_results.png', bbox_inches='tight')
+    output_dir.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_dir / 'neutron_analysis_results.png', bbox_inches='tight')
     plt.show()
 
 if __name__ == "__main__":
