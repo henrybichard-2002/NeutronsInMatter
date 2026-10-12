@@ -1,0 +1,13 @@
+# Raw JEFF evaluation data is intentionally kept out of the repository.
+JEFF40/
+*.jeff
+JEFF40-Evaluations-Neutron-593.zip
+
+# Local project and Python artifacts.
+.spyproject/
+.venv/
+__pycache__/
+*.py[cod]
+
+# Generated analysis plots.
+*.png
