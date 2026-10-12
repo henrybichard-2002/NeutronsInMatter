@@ -1,16 +1,20 @@
 {
   "nuclear_data_library": "JEFF-4.0",
-  "xsdir": null,
-  "neutron_data_suffix": null,
-  "mcnp_executable": null,
+  "neutron_ace_directory": "../Npaths/JEFF40-Processed-Neutron-ACE-293K",
+  "thermal_ace_directory": "../Npaths/JEFF40-Processed-TSL-selected-ACE/data",
   "source_energy_mev": 14.1,
-  "source_rate_neutrons_per_s": null,
+  "source_rate_neutrons_per_s": 10000000.0,
   "histories": 1000000,
+  "batches": 100,
   "sample_interval_cm": 1.0,
   "energy_groups": 400,
+  "beam_width_cm": 0.0,
+  "lateral_half_width_cm": 50.0,
   "thermal_scattering_tables": {
-    "water": null,
-    "hdpe": null
+    "hdpe": {
+      "ace_file": "hch2.00_293.60",
+      "openmc_name": "c_H_in_CH2"
+    }
   },
   "custom_materials": {},
   "scenarios": [
@@ -38,15 +42,6 @@
         {
           "material": "aluminium",
           "thickness_cm": 1.0
-        }
-      ]
-    },
-    {
-      "name": "water-10cm",
-      "layers": [
-        {
-          "material": "water",
-          "thickness_cm": 10.0
         }
       ]
     },

@@ -1,5 +1,6 @@
 # Raw JEFF evaluation data is intentionally kept out of the repository.
 JEFF40/
+Npaths/
 *.jeff
 JEFF40-Evaluations-Neutron-593.zip
 
@@ -12,5 +13,5 @@ __pycache__/
 # Generated analysis plots.
 *.png
 
-# MCNP input, tally, and simulation output files.
+# OpenMC converted nuclear data and generated simulation results.
 outputs/

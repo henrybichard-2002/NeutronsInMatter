@@ -36,86 +36,70 @@ this repository; obtain them separately and place the required file in a local
 `JEFF40` directory. Install its additional dependency with
 `python -m pip install -r requirements-jeff.txt`.
 
-## MCNP shield transport
+## OpenMC shield transport
 
-`mcnp_neutron_shielding.py` generates and runs MCNP continuous-energy
-simulations for a normally incident, monoenergetic 14.1 MeV neutron beam
-passing through configurable planar material layers. The example compares
-air, lead, aluminium, water, and HDPE. Output includes forward surface current
-per source neutron, its MCNP statistical relative error, and an energy-binned
-estimate of the mean forward-neutron energy versus depth. If the source rate is
-known, set `source_rate_neutrons_per_s` in the settings file to also
-report neutrons per second.
+`openmc_neutron_shielding.py` runs a continuous-energy, fixed-source OpenMC
+model for a directional 14.1 MeV neutron beam through planar material layers.
+The settings at `settings/openmc_neutron_shielding.json` point to the
+user-supplied JEFF-4.0 data already under `Npaths/`. The program converts only
+the isotope ACE tables required by the selected scenarios, plus their thermal
+scattering tables, to OpenMC HDF5 format and caches them under
+`outputs/openmc_neutron_shielding/openmc_hdf5_data/`.
 
-**The raw JEFF `.jeff` files in `JEFF40` are ENDF evaluations, not MCNP
-cross-section tables.** Process the JEFF neutron evaluations into continuous-
-energy ACE tables with NJOY, and make the resulting MCNP tables available
-through an `xsdir` file. Supply the suffix used by those actual tables; the
-program checks that the selected isotope tables are listed in `xsdir`. It
-cannot independently verify their nuclear-data provenance, so retain and check
-the NJOY processing records. Water and HDPE also require corresponding
-JEFF-derived bound-hydrogen thermal-scattering ACE tables, configured under
-`thermal_scattering_tables`. The program deliberately stops instead of
-silently substituting free-gas scattering data when those tables are missing.
+**OpenMC is not available as a native Windows conda package.** Run the
+simulation from Linux, WSL2, or Docker. For WSL2, install Miniforge/Conda in
+your Linux distribution, then from the project directory mounted under
+`/mnt/c`:
 
-Install MCNP separately under its applicable license; it is not bundled with
-this repository. After processing JEFF into MCNP-readable ACE data and
-configuring the suffix and thermal table names in
-`settings/mcnp_neutron_shielding.json`, run:
-
-```powershell
-python mcnp_neutron_shielding.py `
-  --xsdir "C:\path\to\jeff-ace\xsdir"
+```bash
+cd /mnt/c/Users/Romul/Analysis/NeutronsInMatter
+conda env create -f environment-openmc.yml
+conda activate neutrons-openmc
+python openmc_neutron_shielding.py
 ```
 
-Edit `settings/mcnp_neutron_shielding.json` to change the source, histories,
-material layers, scenarios, or thermal-scattering tables. The default run
-directory is `outputs/mcnp_neutron_shielding/`; each scenario gets a
-subdirectory containing its MCNP input and output files, while the CSV, plot,
-and metadata are written at the run-directory root. Use `--config` to select a
-different settings file or `--output-dir` to choose another results location.
-Relative paths supplied to those options are resolved from the current working
-directory; the defaults are based on the project location.
+If WSL2 is not installed, install it from an elevated Windows PowerShell with
+`wsl --install -d Ubuntu`, restart if Windows asks, then install Miniforge in
+Ubuntu before running the commands above.
 
-Set `xsdir` to the path of the processed JEFF ACE `xsdir` file and
-`neutron_data_suffix` to its continuous-energy table suffix in that settings
-file to run without command-line overrides. Relative `xsdir` paths in the
-settings file are resolved relative to the settings file itself. The
-`--xsdir` and `--library-suffix` command-line options override these values.
-Until an XSDIR is supplied, running without `--xsdir` reports this setup
-requirement directly rather than failing during argument parsing.
+The local JEFF data paths in the default settings are relative to that settings
+file and resolve to the `Npaths/JEFF40-Processed-Neutron-ACE-293K` and
+`Npaths/JEFF40-Processed-TSL-selected-ACE/data` directories. They can be
+overridden with `--neutron-ace-dir` and `--thermal-ace-dir`.
 
-Use the suffix (shown here as `80c`) and thermal-table names actually present
-in your JEFF-processed `xsdir`; they are examples, not claims about any
-particular processed library. Add or edit scenarios and layer thicknesses in
-the settings JSON; set a layer's `density_g_cm3` when its density differs from
-the built-in room-temperature reference. Materials beyond the built-in presets
-can be added with explicit isotope `ZAID` atom fractions in `custom_materials`.
-For the default room-temperature material densities, use appropriately
-temperature-processed isotope and thermal-scattering ACE tables (about
-293.6 K); changing a material density does not change the nuclear-data
-temperature.
+The input directory contains processed 293.6 K JEFF neutron ACE tables; the
+original `.jeff` evaluations alone are not transport-ready. The supplied
+thermal ACE set includes the polyethylene (`hch2`) table, configured as
+OpenMC's `c_H_in_CH2`. It does **not** include a water bound-hydrogen table, so
+the default scenarios omit water rather than silently using a less accurate
+free-gas approximation. Add a JEFF-derived water thermal table and configure
+it under `thermal_scattering_tables` before adding water to a scenario.
+All built-in materials use the available 293.6 K isotope data. The program
+does not claim to independently benchmark the processed nuclear data.
 
-`--prepare-only` validates the configured tables and writes the MCNP input
-decks without running transport. Completed MCNP output is saved as
-`neutron_transport_results.csv`, `neutron_transport_vs_depth.png`, and
-`run_metadata.json` in `outputs/mcnp_neutron_shielding/` by default. Tally
-values represent forward
-surface crossings per source neutron; a neutron that scatters back and crosses
-a tally plane forward again can contribute another crossing. Mean energies use
-logarithmic energy-bin representative values. Raise the history count and
-refine the energy bins to study statistical uncertainty and energy resolution.
-The transport model is a one-dimensional infinite slab (no lateral escape),
-not a finite shield or a point-source geometry.
+Edit the settings JSON to change the source, history count, batches, materials,
+layer thicknesses, sampling interval, or source rate. Each scenario gets its
+own folder in `outputs/openmc_neutron_shielding/`; CSV results, the plot,
+copied settings and run metadata are saved at that folder's root. Use
+`--output-dir` to select a different output folder, `--threads` to set the CPU
+thread count, or `--prepare-only` to convert data and export model XML without
+running particle histories.
+
+Tally results are positive-direction surface crossings per source neutron,
+using OpenMC's surface-current score filtered to particles coming from the
+upstream cell. Repeated forward crossings are included. Mean energy is
+estimated from logarithmic energy-bin representative values. Reflective
+lateral boundaries approximate an infinite slab and intentionally prevent
+lateral leakage; this is not a finite-shield or point-source geometry.
 
 Run the transport-script tests with:
 
 ```powershell
-python -m unittest test_mcnp_neutron_shielding
+python -m unittest test_openmc_neutron_shielding
 ```
 
 ## Data
 
-The raw JEFF40 directory and `JEFF40-Evaluations-Neutron-593.zip` are
-intentionally excluded from version control. The smaller JSON and CSV data
-files already in the project directory are retained as analysis inputs.
+The raw JEFF40 and processed ACE data directories are local nuclear-data
+inputs and should not be committed. Keep your existing `Npaths` data files
+available alongside the project when running the transport model.
