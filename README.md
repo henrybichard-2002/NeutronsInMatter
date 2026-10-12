@@ -40,11 +40,12 @@ this repository; obtain them separately and place the required file in a local
 
 `openmc_neutron_shielding.py` runs a continuous-energy, fixed-source OpenMC
 model for a directional 14.1 MeV neutron beam through planar material layers.
-The settings at `settings/openmc_neutron_shielding.json` point to the
-user-supplied JEFF-4.0 data already under `Npaths/`. The program converts only
-the isotope ACE tables required by the selected scenarios, plus their thermal
-scattering tables, to OpenMC HDF5 format and caches them under
-`outputs/openmc_neutron_shielding/openmc_hdf5_data/`.
+The settings at `settings/openmc_neutron_shielding.json` uses the preconverted 293.6 K neutron
+HDF5 tables under `Npaths/JEFF40-Processed-OPENMC-HDF5` directly, avoiding
+reconversion and duplicate data files. If that setting is removed, the program
+can instead convert only required neutron ACE tables and cache them under
+`outputs/openmc_neutron_shielding/openmc_hdf5_data/`. The selected thermal
+scattering ACE table is converted and cached when required.
 
 **OpenMC is not available as a native Windows conda package.** Run the
 simulation from Linux, WSL2, or Docker. For WSL2, install Miniforge/Conda in
@@ -63,9 +64,12 @@ If WSL2 is not installed, install it from an elevated Windows PowerShell with
 Ubuntu before running the commands above.
 
 The local JEFF data paths in the default settings are relative to that settings
-file and resolve to the `Npaths/JEFF40-Processed-Neutron-ACE-293K` and
-`Npaths/JEFF40-Processed-TSL-selected-ACE/data` directories. They can be
-overridden with `--neutron-ace-dir` and `--thermal-ace-dir`.
+file and resolve to the `Npaths/JEFF40-Processed-OPENMC-HDF5`,
+`Npaths/JEFF40-Processed-Neutron-ACE-293K`, and
+`Npaths/JEFF40-Processed-TSL-selected-ACE/data` directories. Prepared HDF5
+neutron tables are preferred; use `--neutron-hdf5-dir` to override their
+location. The ACE fallback can be selected with `--neutron-ace-dir`, and the
+thermal ACE path can be overridden with `--thermal-ace-dir`.
 
 The input directory contains processed 293.6 K JEFF neutron ACE tables; the
 original `.jeff` evaluations alone are not transport-ready. The supplied

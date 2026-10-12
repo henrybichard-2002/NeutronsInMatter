@@ -1,5 +1,6 @@
 {
   "nuclear_data_library": "JEFF-4.0",
+  "neutron_hdf5_directory": "../Npaths/JEFF40-Processed-OPENMC-HDF5",
   "neutron_ace_directory": "../Npaths/JEFF40-Processed-Neutron-ACE-293K",
   "thermal_ace_directory": "../Npaths/JEFF40-Processed-TSL-selected-ACE/data",
   "source_energy_mev": 14.1,

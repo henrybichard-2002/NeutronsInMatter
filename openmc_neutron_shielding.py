@@ -1,7 +1,8 @@
 """Run OpenMC fixed-source neutron transport through planar material layers.
 
-JEFF-4.0 continuous-energy ACE data are converted to OpenMC HDF5 data on the
-first run. Raw ENDF evaluations are not used as transport cross sections.
+Prepared JEFF-4.0 OpenMC HDF5 data are used directly when configured. Processed
+ACE data can also be converted to OpenMC HDF5 format and cached on first use.
+Raw ENDF evaluations are not used as transport cross sections.
 """
 
 from __future__ import annotations
@@ -42,6 +43,9 @@ ELEMENT_SYMBOLS = (
     "Nh", "Fl", "Mc", "Lv", "Ts", "Og",
 )
 ACE_FILENAME_RE = re.compile(r"^(\d+)-([A-Za-z]+)-(\d+)g-293\.6$")
+HDF5_FILENAME_RE = re.compile(
+    r"^(\d+)-([A-Za-z]+)-(\d+)g-293\.6\.h5$"
+)
 
 
 NATURAL_ISOTOPES: dict[str, dict[int, float]] = {
@@ -329,6 +333,35 @@ def _index_ace_files(directory: Path) -> dict[int, Path]:
     return ace_files
 
 
+def _index_hdf5_files(directory: Path) -> dict[int, Path]:
+    if not directory.is_dir():
+        raise FileNotFoundError(
+            f"Prepared JEFF OpenMC HDF5 directory not found: {directory}"
+        )
+    hdf5_files: dict[int, Path] = {}
+    for path in directory.glob("*-293.6.h5"):
+        if not path.is_file():
+            continue
+        match = HDF5_FILENAME_RE.fullmatch(path.name)
+        if match is None:
+            continue
+        atomic_number = int(match.group(1))
+        symbol = match.group(2)
+        mass_number = int(match.group(3))
+        if (
+            not 1 <= atomic_number <= len(ELEMENT_SYMBOLS)
+            or ELEMENT_SYMBOLS[atomic_number - 1] != symbol
+        ):
+            continue
+        zaid = atomic_number * 1000 + mass_number
+        if zaid in hdf5_files:
+            raise ValueError(
+                f"More than one 293.6 K HDF5 file was found for ZAID {zaid}."
+            )
+        hdf5_files[zaid] = path
+    return hdf5_files
+
+
 def _resolve_config_path(value: Any, description: str, config_path: Path) -> Path:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"Set {description} in the OpenMC settings JSON.")
@@ -357,12 +390,21 @@ def _convert_ace_data(
     scenarios: tuple[Scenario, ...],
     data_output_dir: Path,
 ) -> tuple[Path, dict[str, str]]:
-    neutron_dir = _resolve_config_path(
-        config.get("neutron_ace_directory"),
-        "'neutron_ace_directory'",
-        config_path,
-    )
-    ace_files = _index_ace_files(neutron_dir)
+    neutron_hdf5_dir: Optional[Path] = None
+    if config.get("neutron_hdf5_directory") is not None:
+        neutron_hdf5_dir = _resolve_config_path(
+            config.get("neutron_hdf5_directory"),
+            "'neutron_hdf5_directory'",
+            config_path,
+        )
+        neutron_files = _index_hdf5_files(neutron_hdf5_dir)
+    else:
+        neutron_dir = _resolve_config_path(
+            config.get("neutron_ace_directory"),
+            "'neutron_ace_directory'",
+            config_path,
+        )
+        neutron_files = _index_ace_files(neutron_dir)
     custom_materials = config.get("custom_materials", {})
     required_zaids = {
         zaid
@@ -370,10 +412,10 @@ def _convert_ace_data(
         for layer in scenario.layers
         for zaid in _material_nuclides(layer.material, custom_materials)
     }
-    missing = sorted(required_zaids - ace_files.keys())
+    missing = sorted(required_zaids - neutron_files.keys())
     if missing:
         raise FileNotFoundError(
-            "Processed JEFF ACE files are missing for: "
+            "JEFF neutron data files are missing for: "
             + ", ".join(_nuclide_name(zaid) for zaid in missing)
         )
 
@@ -414,9 +456,15 @@ def _convert_ace_data(
     library = openmc.data.DataLibrary()
     converted: dict[str, str] = {}
     for zaid in sorted(required_zaids):
-        source = ace_files[zaid]
-        hdf5_path = data_output_dir / f"{_nuclide_name(zaid)}.h5"
-        if not hdf5_path.is_file() or source.stat().st_mtime_ns > hdf5_path.stat().st_mtime_ns:
+        source = neutron_files[zaid]
+        if neutron_hdf5_dir is not None:
+            hdf5_path = source
+        else:
+            hdf5_path = data_output_dir / f"{_nuclide_name(zaid)}.h5"
+        if neutron_hdf5_dir is None and (
+            not hdf5_path.is_file()
+            or source.stat().st_mtime_ns > hdf5_path.stat().st_mtime_ns
+        ):
             try:
                 neutron_data = openmc.data.IncidentNeutron.from_ace(
                     str(source), metastable_scheme="mcnp"
@@ -762,8 +810,9 @@ def _save_results(
             "infinite slab and intentionally exclude lateral leakage."
         ),
         "validation_note": (
-            "JEFF provenance is recorded from the configured ACE directory; "
-            "confirm ACE processing records and validation benchmarks independently."
+            "JEFF provenance is recorded from the configured nuclear data "
+            "directories; confirm processing records and validation benchmarks "
+            "independently."
         ),
         "results_csv": csv_path.name,
     }
@@ -839,7 +888,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Run OpenMC continuous-energy neutron transport through planar "
-            "material layers using the supplied JEFF-4.0 ACE data."
+            "material layers using the supplied JEFF-4.0 data."
         )
     )
     parser.add_argument(
@@ -849,9 +898,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         help=f"JSON settings file (default: {DEFAULT_CONFIG_PATH}).",
     )
     parser.add_argument(
+        "--neutron-hdf5-dir",
+        type=Path,
+        help="Override the prepared 293.6 K JEFF OpenMC neutron HDF5 directory.",
+    )
+    parser.add_argument(
         "--neutron-ace-dir",
         type=Path,
-        help="Override the processed 293.6 K JEFF neutron ACE directory.",
+        help="Override the processed 293.6 K JEFF neutron ACE directory (fallback).",
     )
     parser.add_argument(
         "--thermal-ace-dir",
@@ -872,7 +926,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--prepare-only",
         action="store_true",
-        help="Convert required ACE data and write OpenMC XML without running transport.",
+        help="Prepare nuclear data and write OpenMC XML without running transport.",
     )
     args = parser.parse_args(argv)
 
@@ -881,6 +935,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         config = _load_config(config_path)
         if args.neutron_ace_dir is not None:
             config["neutron_ace_directory"] = str(args.neutron_ace_dir.resolve())
+            config.pop("neutron_hdf5_directory", None)
+        if args.neutron_hdf5_dir is not None:
+            config["neutron_hdf5_directory"] = str(args.neutron_hdf5_dir.resolve())
         if args.thermal_ace_dir is not None:
             config["thermal_ace_directory"] = str(args.thermal_ace_dir.resolve())
         _validate_config(config)
@@ -893,13 +950,6 @@ def main(argv: Optional[list[str]] = None) -> int:
             openmc, config, config_path, scenarios, data_dir
         )
         source_dirs = {
-            "processed_neutron_ace": str(
-                _resolve_config_path(
-                    config["neutron_ace_directory"],
-                    "'neutron_ace_directory'",
-                    config_path,
-                )
-            ),
             "processed_thermal_ace": str(
                 _resolve_config_path(
                     config["thermal_ace_directory"],
@@ -908,6 +958,22 @@ def main(argv: Optional[list[str]] = None) -> int:
                 )
             ),
         }
+        if config.get("neutron_hdf5_directory") is not None:
+            source_dirs["prepared_neutron_hdf5"] = str(
+                _resolve_config_path(
+                    config["neutron_hdf5_directory"],
+                    "'neutron_hdf5_directory'",
+                    config_path,
+                )
+            )
+        else:
+            source_dirs["processed_neutron_ace"] = str(
+                _resolve_config_path(
+                    config["neutron_ace_directory"],
+                    "'neutron_ace_directory'",
+                    config_path,
+                )
+            )
         (output_dir / "configuration.json").write_text(
             json.dumps(config, indent=2) + "\n", encoding="utf-8"
         )

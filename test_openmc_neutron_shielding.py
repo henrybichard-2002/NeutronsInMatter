@@ -7,14 +7,28 @@ import openmc_neutron_shielding as shielding
 
 
 class ConfigTests(unittest.TestCase):
-    def test_default_settings_use_local_processed_jeff_ace_data(self):
+    def test_default_settings_use_local_preconverted_jeff_hdf5_data(self):
         config = json.loads(
             shielding.DEFAULT_CONFIG_PATH.read_text(encoding="utf-8")
         )
 
         shielding._validate_config(config)
         scenarios = shielding._make_scenarios(config)
+        hdf5_dir = (
+            shielding.DEFAULT_CONFIG_PATH.parent
+            / config["neutron_hdf5_directory"]
+        ).resolve()
+        hdf5_files = shielding._index_hdf5_files(hdf5_dir)
+        required_zaids = {
+            zaid
+            for scenario in scenarios
+            for layer in scenario.layers
+            for zaid in shielding._material_nuclides(
+                layer.material, config["custom_materials"]
+            )
+        }
         self.assertEqual(len(scenarios), 4)
+        self.assertEqual(required_zaids - hdf5_files.keys(), set())
         self.assertFalse(
             any(layer.material == "water" for case in scenarios for layer in case.layers)
         )
@@ -111,6 +125,70 @@ class DataTests(unittest.TestCase):
 
         self.assertEqual(set(indexed), {1001, 1002})
         self.assertEqual(indexed[1001].name, "1-H-1g-293.6")
+
+    def test_indexes_preconverted_hdf5_files_at_supported_temperature(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "13-Al-27g-293.6.h5").touch()
+            (root / "13-Al-27g-300.0.h5").touch()
+            (root / "13-Al-27m-293.6.h5").touch()
+            (root / "readme.txt").touch()
+
+            indexed = shielding._index_hdf5_files(root)
+
+        self.assertEqual(set(indexed), {13027})
+        self.assertEqual(indexed[13027].name, "13-Al-27g-293.6.h5")
+
+    def test_preconverted_hdf5_data_is_registered_without_ace_conversion(self):
+        class FakeLibrary:
+            def __init__(self):
+                self.files = []
+
+            def register_file(self, path):
+                self.files.append(path)
+
+            def export_to_xml(self, path):
+                Path(path).write_text("<cross_sections />", encoding="utf-8")
+
+        class FakeData:
+            DataLibrary = FakeLibrary
+
+        class FakeOpenMC:
+            data = FakeData()
+
+        scenario = shielding.Scenario(
+            "lead",
+            (shielding.Layer("lead", 1.0, 11.34),),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            hdf5_dir = root / "hdf5"
+            hdf5_dir.mkdir()
+            for zaid in shielding._material_nuclides("lead", {}):
+                atomic_number, mass_number = divmod(zaid, 1000)
+                symbol = shielding.ELEMENT_SYMBOLS[atomic_number - 1]
+                (hdf5_dir / f"{atomic_number}-{symbol}-{mass_number}g-293.6.h5").touch()
+            config_path = root / "settings.json"
+            config_path.write_text("{}", encoding="utf-8")
+            config = {
+                "neutron_hdf5_directory": str(hdf5_dir),
+                "thermal_scattering_tables": {},
+                "custom_materials": {},
+            }
+            cross_sections, registered = shielding._convert_ace_data(
+                FakeOpenMC(),
+                config,
+                config_path,
+                (scenario,),
+                root / "cache",
+            )
+            self.assertTrue(cross_sections.is_file())
+            self.assertEqual(
+                len(registered), len(shielding._material_nuclides("lead", {}))
+            )
+            self.assertTrue(
+                all(Path(path).parent == hdf5_dir for path in registered.values())
+            )
 
     def test_missing_ace_directory_has_actionable_path(self):
         with self.assertRaisesRegex(FileNotFoundError, "Processed JEFF neutron ACE"):
