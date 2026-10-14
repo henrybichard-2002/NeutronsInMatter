@@ -547,7 +547,16 @@ def _energy_edges_mev(source_energy_mev: float, groups: int) -> list[float]:
         for index in range(groups + 1)
     ]
     if lower_mev < source_energy_mev < upper_mev:
-        edges.append(source_energy_mev)
+        lower_edge = max(edge for edge in edges if edge < source_energy_mev)
+        upper_edge = min(edge for edge in edges if edge > source_energy_mev)
+        half_width = min(
+            source_energy_mev * 1.0e-6,
+            (source_energy_mev - lower_edge) / 2.0,
+            (upper_edge - source_energy_mev) / 2.0,
+        )
+        edges.extend(
+            (source_energy_mev - half_width, source_energy_mev + half_width)
+        )
     edges = sorted(set(edges))
     return [0.0] + edges
 
@@ -666,8 +675,12 @@ def _build_scenario_model(
         float(config["source_energy_mev"]), int(config["energy_groups"])
     )]
     energy_filter = openmc.EnergyFilter(energy_edges_ev)
+    energy_moment_filter = openmc.EnergyFunctionFilter(
+        [0.0, MAX_NEUTRON_ENERGY_MEV * 1.0e6],
+        [0.0, MAX_NEUTRON_ENERGY_MEV * 1.0e6],
+    )
     tallies = openmc.Tallies()
-    tally_names: dict[int, tuple[float, int, str, str]] = {}
+    tally_names: dict[int, tuple[float, int, str, str, str]] = {}
     for tally_index, distance in enumerate(distances, 1):
         surface = next(
             plane for coordinate, plane in zip(z_nodes_mm, z_surfaces)
@@ -691,11 +704,23 @@ def _build_scenario_model(
         ]
         spectrum_tally.scores = ["current"]
         tallies.append(spectrum_tally)
+        energy_moment_tally_name = (
+            f"forward-current-energy-moment-{tally_index}"
+        )
+        energy_moment_tally = openmc.Tally(name=energy_moment_tally_name)
+        energy_moment_tally.filters = [
+            surface_filter,
+            cell_from_filter,
+            energy_moment_filter,
+        ]
+        energy_moment_tally.scores = ["current"]
+        tallies.append(energy_moment_tally)
         tally_names[tally_index] = (
             distance,
             upstream_cell.id,
             total_tally_name,
             spectrum_tally_name,
+            energy_moment_tally_name,
         )
 
     model = openmc.Model(
@@ -714,32 +739,11 @@ def _energy_bin_centers(edges_mev: list[float]) -> list[float]:
     return centers
 
 
-def _mean_energy_and_std_dev(
-    centers: list[float],
-    spectrum: list[float],
-    spectrum_std_dev: list[float],
-) -> tuple[Optional[float], Optional[float]]:
-    total = sum(spectrum)
-    if total <= 0.0:
-        return None, None
-    if len(centers) != len(spectrum) or len(spectrum) != len(spectrum_std_dev):
-        raise ValueError("Energy spectrum values and uncertainties must have equal lengths.")
-
-    mean_energy = sum(
-        center * value for center, value in zip(centers, spectrum)
-    ) / total
-    variance = sum(
-        (((center - mean_energy) * error) / total) ** 2
-        for center, error in zip(centers, spectrum_std_dev)
-    )
-    return mean_energy, math.sqrt(variance)
-
-
 def _read_scenario_results(
     openmc: Any,
     statepoint_path: Path,
     scenario: Scenario,
-    tally_names: dict[int, tuple[float, int, str, str]],
+    tally_names: dict[int, tuple[float, int, str, str, str]],
     config: dict[str, Any],
 ) -> list[PointResult]:
     if not statepoint_path.is_file():
@@ -753,9 +757,18 @@ def _read_scenario_results(
     centers = _energy_bin_centers(energy_edges_mev)
     results: list[PointResult] = []
     with openmc.StatePoint(str(statepoint_path)) as statepoint:
-        for _, (distance, _, total_name, spectrum_name) in tally_names.items():
+        for _, (
+            distance,
+            _,
+            total_name,
+            spectrum_name,
+            energy_moment_name,
+        ) in tally_names.items():
             total_tally = statepoint.get_tally(name=total_name)
             spectrum_tally = statepoint.get_tally(name=spectrum_name)
+            energy_moment_tally = statepoint.get_tally(
+                name=energy_moment_name
+            )
             total = float(total_tally.mean.ravel()[0])
             standard_deviation = float(total_tally.std_dev.ravel()[0])
             if total < -1.0e-14:
@@ -794,6 +807,36 @@ def _read_scenario_results(
                     f"but the total-current tally is {total:g}. Check the energy "
                     "filter range and tally configuration."
                 )
+            energy_per_source_neutron = (
+                float(energy_moment_tally.mean.ravel()[0]) / 1.0e6
+            )
+            energy_standard_deviation = (
+                float(energy_moment_tally.std_dev.ravel()[0]) / 1.0e6
+            )
+            if (
+                not math.isfinite(energy_per_source_neutron)
+                or not math.isfinite(energy_standard_deviation)
+                or energy_per_source_neutron < -1.0e-14
+                or energy_standard_deviation < 0.0
+            ):
+                raise RuntimeError(
+                    f"OpenMC returned invalid energy-weighted forward current "
+                    f"at {distance:g} mm."
+                )
+            energy_per_source_neutron = max(
+                energy_per_source_neutron, 0.0
+            )
+            if total > 0.0:
+                mean_energy = energy_per_source_neutron / total
+                mean_energy_std_dev = math.sqrt(
+                    (energy_standard_deviation / total) ** 2
+                    + (
+                        mean_energy * standard_deviation / total
+                    ) ** 2
+                )
+            else:
+                mean_energy = None
+                mean_energy_std_dev = None
             energy_spectrum = tuple(
                 EnergyBinResult(
                     energy_edges_mev[index],
@@ -803,27 +846,6 @@ def _read_scenario_results(
                 )
                 for index, value in enumerate(spectrum)
             )
-            if distance == 0.0:
-                mean_energy = float(config["source_energy_mev"])
-                mean_energy_std_dev = 0.0
-                energy_flux_per_source_neutron = (
-                    mean_energy * total
-                )
-                energy_flux_std_dev_per_source_neutron = 0.0
-            else:
-                mean_energy, mean_energy_std_dev = _mean_energy_and_std_dev(
-                    centers, spectrum, spectrum_std_dev
-                )
-                energy_flux_per_source_neutron = sum(
-                    center * value
-                    for center, value in zip(centers, spectrum)
-                )
-                energy_flux_std_dev_per_source_neutron = math.sqrt(
-                    sum(
-                        (center * error) ** 2
-                        for center, error in zip(centers, spectrum_std_dev)
-                    )
-                )
             results.append(
                 PointResult(
                     scenario.name,
@@ -831,8 +853,8 @@ def _read_scenario_results(
                     total,
                     standard_deviation,
                     relative_error,
-                    energy_flux_per_source_neutron,
-                    energy_flux_std_dev_per_source_neutron,
+                    energy_per_source_neutron,
+                    energy_standard_deviation,
                     mean_energy,
                     mean_energy_std_dev,
                     energy_spectrum,
@@ -854,9 +876,13 @@ def _save_results(
         "scenario",
         "distance_mm",
         "forward_neutrons_per_source_neutron",
+        "forward_neutron_transmission_fraction",
         "relative_error",
         "mean_forward_energy_mev",
         "mean_forward_energy_std_dev_mev",
+        "forward_energy_mev_per_source_neutron",
+        "forward_energy_std_dev_mev_per_source_neutron",
+        "forward_energy_transmission_fraction",
         "energy_flux_mev_per_mm2_per_source_neutron",
         "energy_flux_mev_per_mm2_per_source_neutron_1sigma_lower",
         "energy_flux_mev_per_mm2_per_source_neutron_1sigma_upper",
@@ -874,10 +900,27 @@ def _save_results(
     surface_area_mm2 = (
         2.0 * float(config.get("lateral_half_width_mm", 500.0))
     ) ** 2
+    reference_results = {
+        result.scenario: result
+        for result in results
+        if result.distance_mm == 0.0
+    }
+    for result in results:
+        reference = reference_results.get(result.scenario)
+        if (
+            reference is None
+            or reference.forward_neutrons_per_source_neutron <= 0.0
+            or reference.forward_energy_mev_per_source_neutron <= 0.0
+        ):
+            raise ValueError(
+                f"Scenario {result.scenario!r} needs positive forward neutron "
+                "and energy current at distance 0 mm to calculate attenuation."
+            )
     with csv_path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=columns)
         writer.writeheader()
         for result in results:
+            reference = reference_results[result.scenario]
             energy_flux_per_source = (
                 result.forward_energy_mev_per_source_neutron / surface_area_mm2
             )
@@ -919,6 +962,9 @@ def _save_results(
                     "forward_neutrons_per_source_neutron": (
                         f"{result.forward_neutrons_per_source_neutron:.10g}"
                     ),
+                    "forward_neutron_transmission_fraction": (
+                        f"{result.forward_neutrons_per_source_neutron / reference.forward_neutrons_per_source_neutron:.10g}"
+                    ),
                     "relative_error": (
                         ""
                         if result.relative_error is None
@@ -933,6 +979,15 @@ def _save_results(
                         ""
                         if result.mean_energy_std_dev_mev is None
                         else f"{result.mean_energy_std_dev_mev:.10g}"
+                    ),
+                    "forward_energy_mev_per_source_neutron": (
+                        f"{result.forward_energy_mev_per_source_neutron:.10g}"
+                    ),
+                    "forward_energy_std_dev_mev_per_source_neutron": (
+                        f"{result.forward_energy_std_dev_mev_per_source_neutron:.10g}"
+                    ),
+                    "forward_energy_transmission_fraction": (
+                        f"{result.forward_energy_mev_per_source_neutron / reference.forward_energy_mev_per_source_neutron:.10g}"
                     ),
                     "energy_flux_mev_per_mm2_per_source_neutron": (
                         f"{energy_flux_per_source:.10g}"
@@ -1106,15 +1161,19 @@ def _save_results(
         "result_definition": (
             "OpenMC surface current tallies filtered by the upstream CellFromFilter "
             "and neutron energy. These are forward crossings per source neutron; "
-            "repeated forward crossings by a particle are included. The main plot "
-            "shows per-energy-bin forward neutron flux density in N/s/cm^2 "
-            "when a source rate is configured, on a linear energy axis. Its "
-            "overlaid mean-forward-energy line is on the same energy axis. Mean "
-            "energies are estimated from energy-bin geometric representative values. "
-            "The mean-energy standard error is propagated from the per-bin tally "
-            "standard deviations with diagonal (uncorrelated-bin) uncertainty. "
-            "Energy flux is estimated from the energy-bin representative values; "
-            "its uncertainty also assumes independent bins. "
+            "repeated forward crossings by a particle are included. Mean forward "
+            "energy and energy current are calculated with an energy-weighted "
+            "surface-current tally, not histogram-bin representative energies. "
+            "The one-sigma mean-energy uncertainty uses first-order ratio "
+            "propagation and assumes independent total-current and energy-current "
+            "tallies. Neutron and energy transmission fractions are each normalized "
+            "to their corresponding forward current at the 0 mm entrance plane. "
+            "The main plot shows per-energy-bin forward neutron flux density in "
+            "N/s/cm^2 when a source rate is configured, on a linear energy axis. "
+            "Its overlaid mean-forward-energy line is on the same energy axis. "
+            "Energy-bin estimates use geometric representative energies; a narrow "
+            "bin around the source energy preserves a monoenergetic source peak. "
+            "Energy-bin one-sigma ranges are per-bin tally uncertainties. "
             "The energy-spectrum CSV reports each energy interval and the "
             "per-interval flux estimate with its one-standard-deviation range."
         ),
@@ -1130,6 +1189,8 @@ def _save_results(
         "results_csv": csv_path.name,
         "energy_spectrum_csv": spectrum_path.name,
         "main_plot": "neutron_energy_flux_heatmap.png",
+        "attenuation_reference_distance_mm": 0.0,
+        "attenuation_plot_script": "src/plot_neutron_attenuation.py",
     }
     (output_dir / "run_metadata.json").write_text(
         json.dumps(metadata, indent=2) + "\n",

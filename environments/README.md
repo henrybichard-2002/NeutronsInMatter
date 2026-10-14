@@ -128,10 +128,27 @@ crossings are included. Reflective lateral boundaries approximate an infinite
 slab and intentionally prevent lateral leakage; this is not a finite-shield
 or point-source geometry.
 
+The aggregate CSV includes neutron-current and energy-current transmission
+fractions normalized to the forward currents at the 0 mm entrance plane.
+Mean forward energy and energy current come from an energy-weighted current
+tally, avoiding the bias from using a coarse energy-bin midpoint as a neutron's
+energy. After running a simulation, create standalone 1D attenuation and
+energy-spectrum plots in its output folder with:
+
+```powershell
+python src/plot_neutron_attenuation.py --input-dir outputs/reactorpath1
+```
+
+This writes `neutron_attenuation_reactorpath1.png` and
+`neutron_spectrum_reactorpath1.png`. Use `--scenario` to plot only one
+scenario, or `--output-dir` to choose a different plot folder. Re-run the
+transport simulation after updating this script before plotting older result
+CSVs; the plotter checks for the corrected transmission columns.
+
 Run the transport-script tests with:
 
 ```powershell
-python -m unittest discover -s src -p test_openmc_neutron_shielding.py
+python -m unittest discover -s src -p "test_*.py"
 ```
 
 ## Data

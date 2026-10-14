@@ -335,23 +335,84 @@ class DataTests(unittest.TestCase):
         edges = shielding._energy_edges_mev(14.1, 24)
 
         self.assertEqual(edges[0], 0.0)
-        self.assertIn(14.1, edges)
         self.assertEqual(edges, sorted(edges))
         self.assertEqual(len(shielding._energy_bin_centers(edges)), len(edges) - 1)
-
-    def test_mean_energy_uncertainty_is_propagated_from_energy_bins(self):
-        mean, uncertainty = shielding._mean_energy_and_std_dev(
-            [1.0, 3.0], [1.0, 1.0], [0.1, 0.2]
+        source_bin = next(
+            (low, high)
+            for low, high in zip(edges, edges[1:])
+            if low < 14.1 < high
         )
+        source_bin_center = (source_bin[0] * source_bin[1]) ** 0.5
+        self.assertAlmostEqual(source_bin_center, 14.1, delta=14.1e-6)
 
-        self.assertEqual(mean, 2.0)
-        self.assertAlmostEqual(uncertainty, (0.0125) ** 0.5)
+    def test_mean_forward_energy_uses_energy_weighted_current_tally(self):
+        class FakeValues:
+            def __init__(self, values):
+                self.values = values if isinstance(values, list) else [values]
 
-    def test_empty_energy_spectrum_has_no_mean_or_uncertainty(self):
-        self.assertEqual(
-            shielding._mean_energy_and_std_dev([1.0], [0.0], [0.0]),
-            (None, None),
+            def ravel(self):
+                return self.values
+
+        class FakeTally:
+            def __init__(self, mean, std_dev):
+                self.mean = FakeValues(mean)
+                self.std_dev = FakeValues(std_dev)
+
+        class FakeStatePoint:
+            def __init__(self, tallies):
+                self.tallies = tallies
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_):
+                return False
+
+            def get_tally(self, name):
+                return self.tallies[name]
+
+        class FakeOpenMC:
+            def __init__(self, statepoint):
+                self.statepoint = statepoint
+
+            def StatePoint(self, _):
+                return self.statepoint
+
+        config = {"source_energy_mev": 14.1, "energy_groups": 24}
+        edges = shielding._energy_edges_mev(14.1, 24)
+        spectrum = [0.0] * (len(edges) - 1)
+        spectrum_std_dev = [0.0] * len(spectrum)
+        source_bin_index = next(
+            index
+            for index, (low, high) in enumerate(zip(edges, edges[1:]))
+            if low < 14.1 < high
         )
+        spectrum[source_bin_index] = 1.0
+        statepoint = FakeStatePoint(
+            {
+                "total": FakeTally(1.0, 0.0),
+                "spectrum": FakeTally(spectrum, spectrum_std_dev),
+                "energy": FakeTally(13.8e6, 2.0e4),
+            }
+        )
+        scenario = shielding.Scenario(
+            "test",
+            (shielding.Layer("air", 10.0, 0.00120479),),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            statepoint_path = Path(directory) / "statepoint.h5"
+            statepoint_path.touch()
+            result = shielding._read_scenario_results(
+                FakeOpenMC(statepoint),
+                statepoint_path,
+                scenario,
+                {1: (1.0, 1, "total", "spectrum", "energy")},
+                config,
+            )[0]
+
+        self.assertEqual(result.forward_energy_mev_per_source_neutron, 13.8)
+        self.assertAlmostEqual(result.mean_energy_mev, 13.8)
+        self.assertAlmostEqual(result.mean_energy_std_dev_mev, 0.02)
 
     def test_monitor_positions_include_material_interfaces(self):
         scenario = shielding.Scenario(
@@ -475,6 +536,22 @@ class DataTests(unittest.TestCase):
         self.assertEqual(
             float(aggregate_rows[0]["forward_flux_per_mm2_per_second"]),
             0.25,
+        )
+        self.assertEqual(
+            float(aggregate_rows[0]["forward_neutron_transmission_fraction"]),
+            1.0,
+        )
+        self.assertEqual(
+            float(aggregate_rows[0]["forward_energy_transmission_fraction"]),
+            1.0,
+        )
+        self.assertEqual(
+            float(aggregate_rows[1]["forward_neutron_transmission_fraction"]),
+            0.0,
+        )
+        self.assertEqual(
+            float(aggregate_rows[1]["forward_energy_mev_per_source_neutron"]),
+            0.0,
         )
         self.assertAlmostEqual(
             float(
