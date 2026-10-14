@@ -1,0 +1,59 @@
+{
+  "nuclear_data_library": "JEFF-4.0",
+  "neutron_hdf5_directory": "../Npaths/JEFF40-Processed-OPENMC-HDF5",
+  "neutron_ace_directory": "../Npaths/JEFF40-Processed-Neutron-ACE-293K",
+  "thermal_ace_directory": "../Npaths/JEFF40-Processed-TSL-selected-ACE/data",
+  "source_energy_mev": 2.45,
+  "source_rate_neutrons_per_s": 1.0e7,
+  "histories": 1000000,
+  "batches": 10,
+  "sample_interval_mm": 0.1,
+  "energy_groups": 100,
+  "beam_width_mm": 20.0,
+  "lateral_half_width_mm": 500.0,
+  "thermal_scattering_tables": {
+    "hdpe": {
+      "ace_file": "hch2.00_293.60",
+      "openmc_name": "c_H_in_CH2"
+    },
+    "water": {
+      "ace_file": "hh2o.00_293.60",
+      "openmc_name": "c_H_in_H2O"
+    }
+  },
+  "custom_materials": {
+    "helium3_2bar": {
+      "density_g_cm3": 0.000247101462395,
+      "nuclide_atom_fractions": {
+        "2003": 1.0
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "name": "DDModerator",
+      "layers": [
+        {
+          "material": "air",
+          "thickness_mm": 30.0
+        },
+        {
+          "material": "hdpe",
+          "thickness_mm": 50.0
+        },
+        {
+          "material": "lead",
+          "thickness_mm": 3.0
+        },
+        {
+          "material": "aluminium",
+          "thickness_mm": 1.5
+        },
+        {
+          "material": "helium3_2bar",
+          "thickness_mm": 60.0
+        }
+      ]
+    }
+  ]
+}

@@ -91,6 +91,25 @@ folders. Use
 thread count, or `--prepare-only` to convert data and export model XML without
 running particle histories.
 
+Five 10-batch run configurations are provided in `settings/`:
+`reactorpath1.json`, `reactorpath2.json`, `reactorpath3.json`,
+`DDModerator.json`, and `DTModerator.json`. Run one at a time, giving each a
+separate output directory so the root-level summary files are kept distinct:
+
+```bash
+python src/openmc_neutron_shielding.py --config settings/reactorpath1.json --output-dir outputs/reactorpath1
+python src/openmc_neutron_shielding.py --config settings/reactorpath2.json --output-dir outputs/reactorpath2
+python src/openmc_neutron_shielding.py --config settings/reactorpath3.json --output-dir outputs/reactorpath3
+python src/openmc_neutron_shielding.py --config settings/DDModerator.json --output-dir outputs/DDModerator
+python src/openmc_neutron_shielding.py --config settings/DTModerator.json --output-dir outputs/DTModerator
+```
+
+The moderator settings model the helium-3 as pure He-3 gas at 293.6 K and
+2 bar absolute, with density calculated using the ideal-gas law
+(`0.000247101462395 g/cm^3`). Their configurations use the available JEFF
+293.6 K He-3 neutron table. The configured history total remains 1,000,000 per
+run; 10 batches means 100,000 histories per batch.
+
 `neutron_energy_flux_heatmap.png` is the main plot: its horizontal axis is
 distance in mm, its **linear** vertical axis is neutron energy in MeV, and its
 color scale is per-energy-bin forward neutron flux density in N/s/cm^2. The

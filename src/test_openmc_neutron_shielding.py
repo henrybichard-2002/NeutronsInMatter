@@ -9,6 +9,114 @@ import openmc_neutron_shielding as shielding
 
 
 class ConfigTests(unittest.TestCase):
+    def test_requested_simulation_settings(self):
+        expected = {
+            "reactorpath1.json": (
+                14.1,
+                [
+                    ("air", 7.3),
+                    ("aluminium", 2.9),
+                    ("air", 30.6),
+                    ("aluminium", 11.0),
+                    ("water", 15.0),
+                    ("aluminium", 3.0),
+                    ("air", 30.0),
+                ],
+            ),
+            "reactorpath2.json": (
+                14.1,
+                [
+                    ("air", 38.0),
+                    ("aluminium", 14.0),
+                    ("water", 1.5),
+                    ("aluminium", 1.5),
+                    ("water", 7.0),
+                    ("aluminium", 1.5),
+                    ("water", 3.5),
+                    ("aluminium", 3.0),
+                    ("air", 30.0),
+                ],
+            ),
+            "reactorpath3.json": (
+                14.1,
+                [
+                    ("air", 40.5),
+                    ("aluminium", 25.5),
+                    ("water", 1.0),
+                    ("aluminium", 3.0),
+                    ("air", 30.0),
+                ],
+            ),
+            "DDModerator.json": (
+                2.45,
+                [
+                    ("air", 30.0),
+                    ("hdpe", 50.0),
+                    ("lead", 3.0),
+                    ("aluminium", 1.5),
+                    ("helium32bar", 60.0),
+                ],
+            ),
+            "DTModerator.json": (
+                14.1,
+                [
+                    ("air", 30.0),
+                    ("hdpe", 110.0),
+                    ("lead", 3.0),
+                    ("aluminium", 1.5),
+                    ("helium32bar", 60.0),
+                ],
+            ),
+        }
+
+        for filename, (source_energy, expected_layers) in expected.items():
+            with self.subTest(filename=filename):
+                config_path = (
+                    shielding.PROJECT_ROOT / "settings" / filename
+                )
+                config = shielding._load_config(config_path)
+                shielding._validate_config(config)
+                scenarios = shielding._make_scenarios(config)
+
+                self.assertEqual(config["source_energy_mev"], source_energy)
+                self.assertEqual(config["batches"], 10)
+                self.assertEqual(config["histories"], 1_000_000)
+                self.assertEqual(len(scenarios), 1)
+                self.assertEqual(
+                    [
+                        (layer.material, layer.thickness_mm)
+                        for layer in scenarios[0].layers
+                    ],
+                    expected_layers,
+                )
+
+                neutron_directory = (
+                    config_path.parent / config["neutron_hdf5_directory"]
+                ).resolve()
+                available_nuclides = shielding._index_hdf5_files(
+                    neutron_directory
+                )
+                required_nuclides = {
+                    zaid
+                    for scenario in scenarios
+                    for layer in scenario.layers
+                    for zaid in shielding._material_nuclides(
+                        layer.material, config["custom_materials"]
+                    )
+                }
+                self.assertEqual(
+                    required_nuclides - available_nuclides.keys(), set()
+                )
+
+                if "helium3_2bar" in config["custom_materials"]:
+                    helium3 = config["custom_materials"]["helium3_2bar"]
+                    self.assertAlmostEqual(
+                        helium3["density_g_cm3"], 0.000247101462395
+                    )
+                    self.assertEqual(
+                        helium3["nuclide_atom_fractions"], {"2003": 1.0}
+                    )
+
     def test_default_settings_use_local_preconverted_jeff_hdf5_data(self):
         config = json.loads(
             shielding.DEFAULT_CONFIG_PATH.read_text(encoding="utf-8")
