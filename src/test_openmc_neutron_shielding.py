@@ -1,7 +1,9 @@
+import csv
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import openmc_neutron_shielding as shielding
 
@@ -27,10 +29,32 @@ class ConfigTests(unittest.TestCase):
                 layer.material, config["custom_materials"]
             )
         }
-        self.assertEqual(len(scenarios), 4)
+        self.assertEqual(len(scenarios), 1)
+        self.assertTrue(shielding.DEFAULT_CONFIG_PATH.is_file())
+        self.assertEqual(shielding.DEFAULT_CONFIG_PATH.parent.parent, shielding.PROJECT_ROOT)
         self.assertEqual(required_zaids - hdf5_files.keys(), set())
-        self.assertFalse(
-            any(layer.material == "water" for case in scenarios for layer in case.layers)
+        self.assertEqual(
+            [
+                (layer.material, layer.thickness_mm)
+                for layer in scenarios[0].layers
+            ],
+            [
+                ("air", 70.0),
+                ("aluminium", 2.0),
+                ("water", 10.0),
+                ("aluminium", 2.0),
+                ("air", 100.0),
+            ],
+        )
+        thermal_path = (
+            shielding.DEFAULT_CONFIG_PATH.parent
+            / config["thermal_ace_directory"]
+            / config["thermal_scattering_tables"]["water"]["ace_file"]
+        ).resolve()
+        self.assertTrue(thermal_path.is_file())
+        self.assertEqual(
+            config["thermal_scattering_tables"]["water"]["openmc_name"],
+            "c_H_in_H2O",
         )
         self.assertEqual(
             config["thermal_scattering_tables"]["hdpe"]["openmc_name"],
@@ -40,7 +64,7 @@ class ConfigTests(unittest.TestCase):
     def test_missing_water_thermal_data_is_not_silently_accepted(self):
         scenario = shielding.Scenario(
             "water",
-            (shielding.Layer("water", 1.0, 0.9982),),
+            (shielding.Layer("water", 10.0, 0.9982),),
         )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -69,6 +93,10 @@ class ConfigTests(unittest.TestCase):
                     object(), config, config_path, (scenario,), root / "cache"
                 )
 
+    def test_centimeter_distance_settings_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "must use millimetres"):
+            shielding._validate_config({"sample_interval_cm": 1.0})
+
 
 class MaterialTests(unittest.TestCase):
     def test_dry_air_alias_uses_air_preset(self):
@@ -94,7 +122,7 @@ class MaterialTests(unittest.TestCase):
                     {
                         "name": "steel",
                         "layers": [
-                            {"material": "stainless_steel", "thickness_cm": 1.0}
+                            {"material": "stainless_steel", "thickness_mm": 10.0}
                         ],
                     }
                 ],
@@ -102,6 +130,7 @@ class MaterialTests(unittest.TestCase):
             }
         )
         self.assertEqual(scenarios[0].layers[0].material, "stainlesssteel")
+        self.assertEqual(scenarios[0].layers[0].thickness_mm, 10.0)
         self.assertEqual(
             shielding._material_nuclides("stainlesssteel", custom),
             {26054: 0.06, 26056: 0.94},
@@ -158,7 +187,7 @@ class DataTests(unittest.TestCase):
 
         scenario = shielding.Scenario(
             "lead",
-            (shielding.Layer("lead", 1.0, 11.34),),
+            (shielding.Layer("lead", 10.0, 11.34),),
         )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -202,18 +231,182 @@ class DataTests(unittest.TestCase):
         self.assertEqual(edges, sorted(edges))
         self.assertEqual(len(shielding._energy_bin_centers(edges)), len(edges) - 1)
 
+    def test_mean_energy_uncertainty_is_propagated_from_energy_bins(self):
+        mean, uncertainty = shielding._mean_energy_and_std_dev(
+            [1.0, 3.0], [1.0, 1.0], [0.1, 0.2]
+        )
+
+        self.assertEqual(mean, 2.0)
+        self.assertAlmostEqual(uncertainty, (0.0125) ** 0.5)
+
+    def test_empty_energy_spectrum_has_no_mean_or_uncertainty(self):
+        self.assertEqual(
+            shielding._mean_energy_and_std_dev([1.0], [0.0], [0.0]),
+            (None, None),
+        )
+
     def test_monitor_positions_include_material_interfaces(self):
         scenario = shielding.Scenario(
             "two layers",
             (
-                shielding.Layer("lead", 1.5, 11.34),
-                shielding.Layer("aluminium", 2.0, 2.7),
+                shielding.Layer("lead", 15.0, 11.34),
+                shielding.Layer("aluminium", 20.0, 2.7),
             ),
         )
 
         self.assertEqual(
-            shielding._monitor_distances(scenario, 1.0),
-            [0.0, 1.0, 1.5, 2.0, 3.0, 3.5],
+            shielding._monitor_distances(scenario, 10.0),
+            [0.0, 10.0, 15.0, 20.0, 30.0, 35.0],
+        )
+
+    def test_results_write_energy_bins_and_flux_ranges_in_millimetres(self):
+        config = {
+            "source_energy_mev": 14.1,
+            "source_rate_neutrons_per_s": 100.0,
+            "histories": 100,
+            "batches": 10,
+            "energy_groups": 24,
+            "lateral_half_width_mm": 10.0,
+            "scenarios": [
+                {
+                    "name": "test",
+                    "layers": [{"material": "lead", "thickness_mm": 10.0}],
+                }
+            ],
+        }
+        edges = shielding._energy_edges_mev(14.1, 24)
+        spectrum = tuple(
+            shielding.EnergyBinResult(
+                low,
+                high,
+                1.0 if index == 0 else 0.0,
+                0.1 if index == 0 else 0.0,
+            )
+            for index, (low, high) in enumerate(zip(edges, edges[1:]))
+        )
+        results = [
+            shielding.PointResult(
+                "test", 0.0, 1.0, 0.1, 0.1, 14.1, 1.41, 14.1, 0.0, spectrum
+            ),
+            shielding.PointResult(
+                "test",
+                10.0,
+                0.0,
+                0.2,
+                None,
+                0.0,
+                0.0,
+                None,
+                None,
+                tuple(
+                    shielding.EnergyBinResult(
+                        energy_bin.energy_min_mev,
+                        energy_bin.energy_max_mev,
+                        0.0,
+                        0.2 if index == 0 else 0.0,
+                    )
+                    for index, energy_bin in enumerate(spectrum)
+                ),
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            import matplotlib
+
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+
+            figures = []
+            original_subplots = plt.subplots
+
+            def capture_subplots(*args, **kwargs):
+                figure, plot_axes = original_subplots(*args, **kwargs)
+                figures.append((figure, plot_axes))
+                return figure, plot_axes
+
+            with patch("matplotlib.pyplot.subplots", side_effect=capture_subplots):
+                shielding._save_results(output_dir, results, config, {}, {})
+
+            with (output_dir / "neutron_transport_results.csv").open(
+                encoding="utf-8", newline=""
+            ) as stream:
+                aggregate_rows = list(csv.DictReader(stream))
+            with (output_dir / "neutron_energy_spectrum.csv").open(
+                encoding="utf-8", newline=""
+            ) as stream:
+                spectrum_rows = list(csv.DictReader(stream))
+            metadata = json.loads(
+                (output_dir / "run_metadata.json").read_text(encoding="utf-8")
+            )
+            heatmap_exists = (
+                output_dir / "neutron_energy_flux_heatmap.png"
+            ).is_file()
+
+        self.assertTrue(heatmap_exists)
+        heatmap_axes = figures[0][1]
+        self.assertEqual(heatmap_axes[0, 0].get_yscale(), "linear")
+        self.assertEqual(
+            heatmap_axes[0, 0].get_ylabel(), "Neutron energy (MeV)"
+        )
+        self.assertEqual(
+            heatmap_axes[0, 0].lines[0].get_label(),
+            "Mean forward neutron energy",
+        )
+        self.assertAlmostEqual(
+            float(heatmap_axes[0, 0].collections[0].get_array().max()),
+            25.0,
+        )
+        self.assertAlmostEqual(
+            heatmap_axes[1, 0].patches[0].get_width(),
+            10.0,
+        )
+        self.assertEqual(metadata["main_plot_energy_axis_scale"], "linear")
+        self.assertEqual(metadata["main_plot_flux_area_unit"], "cm^2")
+        self.assertEqual(metadata["main_plot_flux_unit"], "N/s/cm^2")
+        self.assertEqual(aggregate_rows[0]["distance_mm"], "0")
+        self.assertEqual(
+            float(aggregate_rows[0]["forward_flux_per_mm2_per_second"]),
+            0.25,
+        )
+        self.assertAlmostEqual(
+            float(
+                aggregate_rows[0][
+                    "forward_flux_per_mm2_per_second_1sigma_lower"
+                ]
+            ),
+            0.225,
+        )
+        self.assertAlmostEqual(
+            float(
+                aggregate_rows[0][
+                    "energy_flux_mev_per_mm2_per_second"
+                ]
+            ),
+            3.525,
+        )
+        self.assertEqual(len(spectrum_rows), 2 * (len(edges) - 1))
+        self.assertEqual(spectrum_rows[0]["distance_mm"], "0")
+        self.assertEqual(spectrum_rows[0]["energy_min_mev"], "0")
+        self.assertAlmostEqual(
+            float(spectrum_rows[0]["forward_flux_per_mm2_per_second"]),
+            0.25,
+        )
+        self.assertAlmostEqual(
+            float(
+                spectrum_rows[0][
+                    "forward_flux_per_mm2_per_second_1sigma_upper"
+                ]
+            ),
+            0.275,
+        )
+        self.assertEqual(aggregate_rows[1]["relative_error"], "")
+        self.assertEqual(
+            float(
+                aggregate_rows[1][
+                    "forward_flux_per_mm2_per_second_1sigma_upper"
+                ]
+            ),
+            0.05,
         )
 
 

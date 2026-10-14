@@ -4,54 +4,47 @@
   "neutron_ace_directory": "../Npaths/JEFF40-Processed-Neutron-ACE-293K",
   "thermal_ace_directory": "../Npaths/JEFF40-Processed-TSL-selected-ACE/data",
   "source_energy_mev": 14.1,
-  "source_rate_neutrons_per_s": 10000000.0,
+  "source_rate_neutrons_per_s": 1.0e7,
   "histories": 1000000,
   "batches": 100,
-  "sample_interval_cm": 1.0,
-  "energy_groups": 400,
-  "beam_width_cm": 0.0,
-  "lateral_half_width_cm": 50.0,
+  "sample_interval_mm": 0.1,
+  "energy_groups": 100,
+  "beam_width_mm": 20.0,
+  "lateral_half_width_mm": 500.0,
   "thermal_scattering_tables": {
     "hdpe": {
       "ace_file": "hch2.00_293.60",
       "openmc_name": "c_H_in_CH2"
+    },
+    "water": {
+      "ace_file": "hh2o.00_293.60",
+      "openmc_name": "c_H_in_H2O"
     }
   },
   "custom_materials": {},
   "scenarios": [
     {
-      "name": "air-100cm",
+      "name": "air-aluminium-water-aluminium-air",
       "layers": [
         {
           "material": "air",
-          "thickness_cm": 100.0
-        }
-      ]
-    },
-    {
-      "name": "lead-1cm",
-      "layers": [
-        {
-          "material": "lead",
-          "thickness_cm": 1.0
-        }
-      ]
-    },
-    {
-      "name": "aluminium-1cm",
-      "layers": [
+          "thickness_mm": 70.0
+        },
         {
           "material": "aluminium",
-          "thickness_cm": 1.0
-        }
-      ]
-    },
-    {
-      "name": "hdpe-10cm",
-      "layers": [
+          "thickness_mm": 2.0
+        },
         {
-          "material": "hdpe",
-          "thickness_cm": 10.0
+          "material": "water",
+          "thickness_mm": 10.0
+        },
+        {
+          "material": "aluminium",
+          "thickness_mm": 2.0
+        },
+        {
+          "material": "air",
+          "thickness_mm": 100.0
         }
       ]
     }

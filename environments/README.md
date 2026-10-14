@@ -38,25 +38,30 @@ this repository; obtain them separately and place the required file in a local
 
 ## OpenMC shield transport
 
-`openmc_neutron_shielding.py` runs a continuous-energy, fixed-source OpenMC
-model for a directional 14.1 MeV neutron beam through planar material layers.
-The settings at `settings/openmc_neutron_shielding.json` uses the preconverted 293.6 K neutron
-HDF5 tables under `Npaths/JEFF40-Processed-OPENMC-HDF5` directly, avoiding
-reconversion and duplicate data files. If that setting is removed, the program
-can instead convert only required neutron ACE tables and cache them under
-`outputs/openmc_neutron_shielding/openmc_hdf5_data/`. The selected thermal
-scattering ACE table is converted and cached when required.
+`src/openmc_neutron_shielding.py` runs continuous-energy, fixed-source OpenMC
+transport for a directional neutron beam through a one-dimensional stack of
+planar layers. The editable example configuration is
+`settings/openmc_neutron_shielding.json`; its default stack is 70 mm air,
+2 mm aluminium, 10 mm water, 2 mm aluminium, then 100 mm air. Edit each
+layer's `material` and `thickness_mm`, or add/remove layer objects to change
+the material order and thicknesses. Built-in materials include air, aluminium,
+HDPE, lead, and water; define additional materials in `custom_materials`.
+
+All user-facing geometry settings and reported distances use millimetres:
+`thickness_mm`, `sample_interval_mm`, `beam_width_mm`, and
+`lateral_half_width_mm`. Layer boundaries are always scored in addition to
+regular sample positions. OpenMC internally expects coordinates in centimetres,
+so the model converts configured millimetres to centimetres only when creating
+its transport geometry. Material density remains in g/cm^3.
 
 **OpenMC is not available as a native Windows conda package.** Run the
 simulation from Linux, WSL2, or Docker. For WSL2, install Miniforge/Conda in
-your Linux distribution, then from the project directory mounted under
-`/mnt/c`:
+your Linux distribution, then from the project root:
 
 ```bash
-cd /mnt/c/Users/Romul/Analysis/NeutronsInMatter
-conda env create -f environment-openmc.yml
+conda env create -f environments/environment-openmc.yml
 conda activate neutrons-openmc
-python openmc_neutron_shielding.py
+python src/openmc_neutron_shielding.py
 ```
 
 If WSL2 is not installed, install it from an elevated Windows PowerShell with
@@ -73,33 +78,41 @@ thermal ACE path can be overridden with `--thermal-ace-dir`.
 
 The input directory contains processed 293.6 K JEFF neutron ACE tables; the
 original `.jeff` evaluations alone are not transport-ready. The supplied
-thermal ACE set includes the polyethylene (`hch2`) table, configured as
-OpenMC's `c_H_in_CH2`. It does **not** include a water bound-hydrogen table, so
-the default scenarios omit water rather than silently using a less accurate
-free-gas approximation. Add a JEFF-derived water thermal table and configure
-it under `thermal_scattering_tables` before adding water to a scenario.
+thermal ACE set includes polyethylene (`hch2`) and light water (`hh2o`) tables,
+configured as OpenMC's `c_H_in_CH2` and `c_H_in_H2O`.
 All built-in materials use the available 293.6 K isotope data. The program
 does not claim to independently benchmark the processed nuclear data.
 
-Edit the settings JSON to change the source, history count, batches, materials,
-layer thicknesses, sampling interval, or source rate. Each scenario gets its
-own folder in `outputs/openmc_neutron_shielding/`; CSV results, the plot,
-copied settings and run metadata are saved at that folder's root. Use
+The settings JSON also controls the source energy/rate, history count, batches,
+energy-group count, and sample interval. Each scenario gets its own folder in
+`outputs/openmc_neutron_shielding/`; model files are saved in those scenario
+folders. Use
 `--output-dir` to select a different output folder, `--threads` to set the CPU
 thread count, or `--prepare-only` to convert data and export model XML without
 running particle histories.
 
-Tally results are positive-direction surface crossings per source neutron,
-using OpenMC's surface-current score filtered to particles coming from the
-upstream cell. Repeated forward crossings are included. Mean energy is
-estimated from logarithmic energy-bin representative values. Reflective
-lateral boundaries approximate an infinite slab and intentionally prevent
-lateral leakage; this is not a finite-shield or point-source geometry.
+`neutron_energy_flux_heatmap.png` is the main plot: its horizontal axis is
+distance in mm, its **linear** vertical axis is neutron energy in MeV, and its
+color scale is per-energy-bin forward neutron flux density in N/s/cm^2. The
+mean-forward-neutron-energy curve is overlaid on the same energy axis with
+its one-sigma statistical uncertainty shown as a band. A labeled layer strip
+below the heatmap shows the materials, thicknesses, and interface positions.
+
+The aggregate `neutron_transport_results.csv` reports neutron flux, energy
+flux, mean forward energy, and one-standard-deviation Monte Carlo uncertainty
+at each scored distance. `neutron_energy_spectrum.csv` reports every energy
+bin at every scored distance, with the bin's energy limits, neutron-flux
+estimate, and lower/upper one-sigma ranges. CSV flux values are divided by the
+modeled plane area (mm^2); the main heatmap instead uses cm^2 to report the
+requested N/s/cm^2 when a source rate is configured. Repeated forward
+crossings are included. Reflective lateral boundaries approximate an infinite
+slab and intentionally prevent lateral leakage; this is not a finite-shield
+or point-source geometry.
 
 Run the transport-script tests with:
 
 ```powershell
-python -m unittest test_openmc_neutron_shielding
+python -m unittest discover -s src -p test_openmc_neutron_shielding.py
 ```
 
 ## Data
